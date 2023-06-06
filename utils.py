@@ -5,17 +5,6 @@ import cloudscraper
 import psycopg2
 from bs4 import BeautifulSoup
 from dateutil import tz
-from dotenv import load_dotenv
-
-# Carrega as variáveis de ambiente do arquivo .env
-load_dotenv()
-
-# Acesse as variáveis de ambiente carregadas
-HOST = os.getenv("HOST")
-PORT = os.getenv("PORT")
-DATABASE = os.getenv("DATABASE")
-USER = os.getenv("USER")
-PASSWORD = os.getenv("PASSWORD")
 
 url_base = "https://www.oddschecker.com/greyhounds"
 

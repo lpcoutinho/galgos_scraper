@@ -1,8 +1,7 @@
-
-from scraper import  get_race_list, get_upcoming_races, get_data_races
-from utils import scraper
-
 import time
+
+from scraper import get_data_races, get_race_list, get_upcoming_races
+from utils import scraper
 
 # URLs
 # pattern = r"/greyhounds/[a-zA-Z-]+/\d{2}:\d{2}/winner"
@@ -23,18 +22,18 @@ print("\n Total de corridas hoje:", race_list.shape[0])
 
 while True:
     try:
-        minutes = 60 # capturar dados de corridas dos próximos x minutos
+        minutes = 60  # capturar dados de corridas dos próximos x minutos
         next_races = get_upcoming_races(race_list, minutes)
 
-        print(f'Existem {len(next_races)} corridas nos próximos {minutes} minutos\n')
+        print(f"Existem {len(next_races)} corridas nos próximos {minutes} minutos\n")
 
         for race in next_races:
             # Obtém o link da próxima corrida
-            top_2_finish_nxr = race.replace('winner', top_2_finish)
-            top_3_finish_nxr = race.replace('winner', top_3_finish)
+            top_2_finish_nxr = race.replace("winner", top_2_finish)
+            top_3_finish_nxr = race.replace("winner", top_3_finish)
             print(top_2_finish_nxr)
 
-           # Printa link e obtém os dados da corrida no mercado winner
+            # Printa link e obtém os dados da corrida no mercado winner
             print(race)
             get_data_races(race)
 
