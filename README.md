@@ -20,6 +20,7 @@ pip install -r requirements.txt
 crontab -e
 ```
 -Edite o arquivo para o tempo desejado. Sugestão, todo dia às 03:01h do servidor.
+
 `5 3 * * * /root/app/get_race_list.sh >> /root/app/get_race_list_log.txt`   
 
 Com o arquivo `race_list.csv` criado pelo serviço `get_race_list.py` estamos prontos para capturar os dados da próxima corrida
