@@ -15,7 +15,7 @@ pip install -r requirements.txt
 
 - Crie o arquivo `.env` e adicione as credenciais do seu banco de dados. Utilize o exemplo `.env_example`
 
-- O serviço `get_race_list.py` cria uma lista com as corridas do dia. Agende a tarefa de criar uma lista de corridas diariamente. Com `crontab`:
+- O serviço `get_race_list.py` cria uma lista com as corridas do dia. Agende a tarefa de criar uma lista de corridas diariamente com `crontab`:
 ```shell
 crontab -e
 ```
