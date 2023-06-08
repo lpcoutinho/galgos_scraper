@@ -19,7 +19,7 @@ pip install -r requirements.txt
 ```shell
 crontab -e
 ```
--Edite o arquivo para o tempo desejado. Sugestão, todo dia às 03:01h do servidor.
+-Edite o arquivo para o tempo desejado. Sugestão, todo dia às 03:05h do servidor.
 
 `5 3 * * * /root/app/get_race_list.sh >> /root/app/get_race_list_log.txt`   
 
