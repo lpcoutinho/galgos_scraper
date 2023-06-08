@@ -1,34 +1,53 @@
 import os
-import re
 import time
 from datetime import datetime, timedelta
 
 import cloudscraper
 import pandas as pd
 import psycopg2
+import requests
 import undetected_chromedriver as uc
 from bs4 import BeautifulSoup
+from cloudscraper import exceptions
+from dateutil import tz
 from dotenv import load_dotenv
+from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.remote.webdriver import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from urllib3 import disable_warnings
+from urllib3.exceptions import InsecureRequestWarning
 
-from utils import establish_connection, london_time
+from utils import ler_trecho
 
-# Carrega as variáveis de ambiente do arquivo .env
+# Carregar as variáveis de ambiente do arquivo .env
 load_dotenv()
 
-# Acesse as variáveis de ambiente carregadas
 HOST = os.getenv("HOST")
 PORT = os.getenv("PORT")
 DATABASE = os.getenv("DATABASE")
 USER = os.getenv("USER")
 PASSWORD = os.getenv("PASSWORD")
 
-# Configura as opções do Chrome para executar em modo headless
-chrome_options = Options()
-chrome_options.add_argument("--headless")
+# print(HOST)
+# print(PORT)
+# print(DATABASE)
+# print(USER)
+# print(PASSWORD)
+
+# Desabilita erro de insegurança na requisição
+disable_warnings(InsecureRequestWarning)
+
+df = pd.read_csv("race_list.csv")
+# print(df)
+
+# Obtém a lista de corridas do dia
+race_list = df
+print("\n Total de corridas hoje:", race_list.shape[0])
 
 
+# Função que conect ao banco de dados
 def establish_connection():
     conn = psycopg2.connect(
         host="localhost",
@@ -40,144 +59,82 @@ def establish_connection():
     return conn
 
 
-# URLs
-url_base = "https://www.oddschecker.com/greyhounds"
-pattern = r"/greyhounds/[a-zA-Z-]+/\d{2}:\d{2}/winner"
-top_2_finish = "top-2-finish"
-top_3_finish = "top-3-finish"
-
-data = []
-
-# Cria o scraper usando o CloudScraper
-scraper = cloudscraper.create_scraper()
-# print(scraper.get(url_base).content)
-
-# Faz a requisição para obter o conteúdo da página
-request = scraper.get(url_base)
-request = request.text
-
-# Cria um objeto Beautiful Soup a partir do conteúdo da página
-soup = BeautifulSoup(request, "html.parser")
-# print(soup.prettify())
-
-
-# Constrói um dataframe com as corridas do dia
-def get_race_list(soup):
-    # Verificar se a tag 'html' contém o atributo 'ng-app="ocAngularApp"'
-    if soup.html.has_attr("ng-app") and soup.html["ng-app"] == "ocAngularApp":
-        # print("O atributo ng-app='ocAngularApp' existe.")
-        # Encontrar todas as tags 'li' que possuem a classe 'group accordian-parent beta-body' e o atributo 'data-day'
-        races = soup.find_all(
-            "li", class_="group accordian-parent beta-body", attrs={"data-day": True}
-        )
-
-        for race in races:
-            # Encontrar todas as tags 'a' dentro da tag 'li'
-            races = race.find_all("a")
-            for link in races:
-                # Obter o atributo 'href' do link
-                link = link.get("href")
-                # Verificar se o link corresponde ao padrão definido
-                if re.match(pattern, link):
-                    # Formatar o link completo adicionando o prefixo 'https://www.oddschecker.com'
-                    link = "https://www.oddschecker.com" + link
-                    # Adicionar o link à lista de dados
-                    data.append(link)
-
-    else:
-        # print("O atributo ng-app='ocAngularApp' não existe.\n")
-        # Função auxiliar para encontrar o contêiner das corrida
-        def find_race_meets_container(tag):
-            return (
-                tag.name == "div"
-                and tag.has_attr("class")
-                and "race-meets-container" in tag["class"]
-            )
-
-        # Encontra o contêiner das corridas do Reino Unido e Irlanda
-        uk_container = soup.find(find_race_meets_container)
-
-        # Encontra todas as tags 'div' com a classe 'race-details' dentro do contêiner
-        races = uk_container.find_all("div", class_="race-details")
-
-        for race in races:
-            # Encontra todas as tags 'a' dentro da tag 'div'
-            races = race.find_all("a")
-            for link in races:
-                # Obtém o atributo 'href' do link
-                link = link.get("href")
-                # Verifica se o link corresponde ao padrão definido
-                if re.match(pattern, link):
-                    # Formata o link completo adicionando o prefixo 'https://www.oddschecker.com'
-                    link = "https://www.oddschecker.com" + link
-                    # Adiciona o link à lista de dados
-                    data.append(link)
-
-    # Cria um DataFrame com os links das corridas
-    df = pd.DataFrame(data, columns=["link"])
-
-    # Extrai o nome do local da corrida a partir do link
-    df["lugar"] = df["link"].apply(
-        lambda link: re.search(r"/greyhounds/([^/]+)/\d{2}:\d{2}/", link).group(1)
-    )
-
-    # Extrai a data e hora da corrida a partir do link
-    df["quando"] = df["link"].apply(
-        lambda link: re.search(r"/\d{2}:\d{2}/", link).group().strip("/")
-    )
-
-    # Converte a coluna "quando" para o formato de data e hora
-    df["quando"] = pd.to_datetime(df["quando"])
-
-    # Extrai o tipo de mercado da corrida a partir do link
-    df["mercado"] = df["link"].apply(
-        lambda link: re.search(r"/winner", link).group().strip("/")
-    )
-
-    # Ordena o DataFrame com base na coluna "quando"
-    race_list = df.sort_values("quando")
-
-    return race_list
-
-
-currnt_time = datetime.now()
-
-
-# Busca o link da próxima corrida no horário londrino
+# Função para obter a próxima corrida caso ocorra em 2h ou menos
 def get_next_race(df):
-    # Filtra as corridas que ocorrerão após o horário londrino atual
-    # currnt_time = datetime.now()
-    next_race = df[df["quando"] > london_time()].head(1)
-    # next_race = df[df["quando"] > currnt_time].head(1) # para testar no horário brasileiro
+    time_zone_uk = tz.gettz("Europe/London")
 
-    # Obtém o link da próxima corrida
-    next_race = next_race.iloc[0]["link"]
+    london_time = datetime.now(time_zone_uk)
+    london_time = london_time.replace(tzinfo=None)
 
-    # Imprime o link da próxima corrida para monitoramento
-    print("\nMonitorando a próxima corrida:\n", next_race, "\n")
+    current_time = london_time  # Obtém o horário londrino atual
+    print("Horário londrino:", current_time)
+    # limite = current_time + timedelta(
+    #     hours=2
+    # )  # Calcula o horário limite (atual + 2 horas)
+    df = pd.read_csv("race_list.csv")
+    print(df)
 
-    return next_race
+    df["quando"] = pd.to_datetime(
+        df["quando"]
+    )  # Converte a coluna "quando" para o formato de data e hora
+
+    df = df[df["quando"] > current_time]  # Remove as corridas que já ocorreram
+
+    proximas_corridas = df[
+        df["quando"] <= limite
+    ]  # Filtra as corridas que ocorrerão dentro das próximas duas horas
+    # print(proximas_corridas)
+
+    if not proximas_corridas.empty:
+        proximas_corridas = proximas_corridas.sort_values(
+            "quando"
+        )  # Ordena as corridas por horário
+        next_race_link = proximas_corridas.iloc[0][
+            "link"
+        ]  # Obtém o link da próxima corrida
+
+        tempo_para_inicio = proximas_corridas.iloc[0]["quando"] - current_time
+
+        if (
+            tempo_para_inicio.total_seconds() <= 7200
+        ):  # Se a corrida ocorre nas próximas duas horas monitore
+            print("\nMonitorando a próxima corrida:\n", next_race_link, "\n")
+            return next_race_link
+
+    return None
 
 
-def get_upcoming_races(df, minutes):
-    # Calcula o tempo limite (x minutos a partir da hora atual)
-    time_limit = london_time() + timedelta(minutes=minutes)
+def get_upcoming_races(df):
+    time_zone_uk = tz.gettz("Europe/London")
+
+    london_time = datetime.now(time_zone_uk)
+    london_time = london_time.replace(tzinfo=None)
+
+    current_time = london_time
+
+    current_time = london_time  # Obtém o horário londrino atual
+    print("Horário londrino:", current_time)
+    limite = current_time + timedelta(
+        hours=2
+    )  # Calcula o horário limite (atual + 2 horas)
+
+    df["quando"] = pd.to_datetime(
+        df["quando"]
+    )  # Converte a coluna "quando" para o formato de data e hora
 
     # Filtra as corridas cujo horário esteja dentro do intervalo
-    upcoming_races = df[(df["quando"] > london_time()) & (df["quando"] <= time_limit)]
-    # upcoming_races = df[(df["quando"] > currnt_time) & (df["quando"] <= time_limit)]
-
+    upcoming_races = df[(df["quando"] > london_time()) & (df["quando"] <= limite)]
     # Obtém os links das corridas futuras como uma lista
     upcoming_races_links = upcoming_races["link"].tolist()
 
     # Imprime os links das corridas futuras para fins de verificação
-    print("\n", upcoming_races_links, "\n")
+    print("\n", "Quantidade de corridas a monitorar:", len(upcoming_races_links), "\n")
 
     return upcoming_races_links
 
 
 def get_data_races(race):
-    # Extraindo dados da URL
+    print("Extraindo dados da URL...")
     url_parts = race.split("/")
 
     onde = url_parts[4]
@@ -187,37 +144,91 @@ def get_data_races(race):
     quando = f"{date} {quando}"
 
     try:
-        # Fazendo uma requisição para obter o conteúdo da página da corrida
-        request = scraper.get(race)
-        request = request.text
+        print("Fazendo uma requisição para obter o conteúdo da página da corrida...\n")
+        response = scraper.get(race)
+        # print(response.text)
+        # response_log(response)
+        # response = response.text
+    except exceptions.CloudflareChallengeError as e:
+        print("Erro Cloudflare Challenge:", str(e))
+        # proxy = (
+        #     "http://76574a8de357e6663ca07da88a64532437ddf5f5:@proxy.zenrows.com:8001"
+        # )
+        proxy = "http://76574a8de357e6663ca07da88a64532437ddf5f5:antibot=true@proxy.zenrows.com:8001"
+        proxies = {"http": proxy, "https": proxy}
+        # response = scraper.get(url, proxies=proxies, verify=False)
+        response = requests.get(race, proxies=proxies, verify=False)
+        # response = response.text
+        # response_log(response)
+        ler_trecho()
+    except exceptions.CloudflareCaptchaError as e:
+        print("Erro Cloudflare Captcha:", str(e))
+    except exceptions.CloudflareConnectionError as e:
+        print("Erro de conexão com o Cloudflare:", str(e))
+    except exceptions.HTTPError as e:
+        print("Erro HTTP:", str(e))
+    except Exception as e:
+        print("Erro desconhecido pelo scraper:", str(e))
 
-        # Criando um objeto BeautifulSoup para analisar o conteúdo HTML da página
-        soup = BeautifulSoup(request, "html.parser")
+    try:
+        print(
+            "\nCriando um objeto BeautifulSoup para analisar o conteúdo HTML da página...\n"
+        )
+        # print(response.text)
 
+        # soup = BeautifulSoup(response, "html.parser")
+        # soup = BeautifulSoup(response, "html5lib")
+        soup = BeautifulSoup(response.text, "lxml")
+        # soup = BeautifulSoup(response.text, "lxml-xml")
+        # print('soup criado')
+
+        # consulte o html
+        # with open("race_list_list.html", "w") as file:
+        #     file.write(soup.prettify())
+    except Exception as e:
+        print("Erro desconhecido pelo BeautifulSoup:", str(e))
+
+    try:
         # Se o HTML possuir o atributo ng-app, utilizar undetected_chromedriver
         if soup.html.has_attr("ng-app") and soup.html["ng-app"] == "ocAngularApp":
-            print("pega por lista <li>")
+            print("Pega informações por <li>")
 
             print("Acessando o site...")
             try:
+                # Configura as opções do Chrome para executar em modo headless
+                chrome_options = Options()
+                chrome_options.add_argument("--headless")
                 # Inicializa o driver do Chrome usando as opções configuradas
                 driver = uc.Chrome(options=chrome_options)
                 # driver = uc.Chrome()
                 driver.get(race)
 
+                time.sleep(15)
                 # Tira um print da tela
-                # driver.save_screenshot("screenshot.png")
-                print('Aguarde...')
+                driver.save_screenshot("screenshot.png")
+
+                print("Aguarde...")
                 # Clique no popup (se existir)
-                time.sleep(5)
+
                 try:
-                    driver.find_element(
-                        By.XPATH, "/html/body/div[2]/div/div/div/button[1]"
-                    ).click()
+                    # Esperar até que um elemento seja visível
+                    element = WebDriverWait(driver, 10).until(
+                        EC.visibility_of_element_located(
+                            (By.XPATH, "/html/body/div[2]/div/div/div/button[1]")
+                        )
+                    )
+
+                    # Realizar ações no elemento após a espera
+                    element.click()
+                    # driver.find_element(
+                    #     By.XPATH, "/html/body/div[2]/div/div/div/button[1]"
+                    # ).click()
                     print("Popup selecionado")
-                except:
+                except Exception as e:
                     print("Popup não encontrado")
-                    pass
+                    print(e)
+                    time.sleep(2)
+                    # pass
 
                 # Obtém o conteúdo HTML da página após as interações no navegador
                 html_content = driver.page_source
@@ -243,20 +254,34 @@ def get_data_races(race):
                     odd_frac = odds["data-o"]
                     odd_dec = odds["data-odig"]
                     data_fodds = odds["data-fodds"]
-
+                    time_scrape = datetime.now()
                     # data.append([trap, galgo, odd_dec, onde, quando, mercado])
                     data.append(
-                        [trap, galgo, odd_dec, odd_frac, data_fodds, onde, quando, mercado]
+                        [
+                            trap,
+                            galgo,
+                            odd_dec,
+                            odd_frac,
+                            data_fodds,
+                            onde,
+                            quando,
+                            mercado,
+                            time_scrape,
+                        ]
                     )
 
                 # Encerra o driver do Chrome
                 driver.quit()
-            except:
-                print('Erro ao ecessar o site, provável bloqueio do antibot')
-                pass
+                print("Encerrando o driver")
+            except SessionNotCreatedException as e:
+                print("Erro na criação da sessão do WebDriver:", str(e))
+            except WebDriverException as e:
+                print("Erro genérico do WebDriver:", str(e))
+            except Exception as e:
+                print("Erro desconhecido, provável bloqueio do antibot:", str(e))
         else:
             # Se o HTML não possuir o atributo ng-app pegue os dados apenas com cloudscraper e BeautifulSoup
-            print("\npega por div <div>\n")
+            print("\nPegando informações por div <div>\n")
 
             # Encontra os elementos da lista de cães usando a classe CSS 'diff-row evTabRow bc'
             dog_list = soup.find_all("tr", class_="diff-row evTabRow bc")
@@ -271,36 +296,48 @@ def get_data_races(race):
                 odd_frac = odds["data-o"]
                 odd_dec = odds["data-odig"]
                 data_fodds = odds["data-fodds"]
+                time_scrape = datetime.now()
 
                 data.append(
-                    [trap, galgo, odd_dec, odd_frac, data_fodds, onde, quando, mercado]
+                    [
+                        trap,
+                        galgo,
+                        odd_dec,
+                        odd_frac,
+                        data_fodds,
+                        onde,
+                        quando,
+                        mercado,
+                        time_scrape,
+                    ]
                 )
-            try:
-                print(
-                    f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}"
-                )
-                # Estabelece a conexão com o banco de dados
-                conn = establish_connection()
-                cur = conn.cursor()
+        try:
+            print(
+                f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}"
+            )
+            # Estabelece a conexão com o banco de dados
+            conn = establish_connection()
+            cur = conn.cursor()
 
-                # Executa a consulta SQL para inserir os dados no banco de dados
-                # query = query
-                query = "INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado) DO UPDATE SET odd = excluded.odd"
+            # # Executa a consulta SQL para inserir os dados no banco de dados
+            # query = "INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado) DO UPDATE SET odd = excluded.odd"
+            query = """
+                    INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado)
+                    VALUES (%s, %s, %s, %s, %s, %s);
+            """
+            data_sql = (odd_dec, onde, quando, trap, galgo, mercado)
+            cur.execute(query, data_sql)
+            conn.commit()
 
-                data_sql = (odd_dec, onde, quando, trap, galgo, mercado)
-                cur.execute(query, data_sql)
-                conn.commit()
-
-                cur.close()
-                conn.close()
-                print("Banco de dados atualizado.")
-            except:
-                print("Erro ao salvar informações no banco de dados")
-
-            # print(data)
+            cur.close()
+            conn.close()
+            print("Banco de dados atualizado.\n")
+        except Exception as e:
+            print("Erro ao salvar informações no banco de dados:", str(e), "\n")
 
         # Cria um DataFrame a partir dos dados coletados
         try:
+            # print(data)
             df = pd.DataFrame(
                 data,
                 columns=[
@@ -312,19 +349,22 @@ def get_data_races(race):
                     "onde",
                     "quando",
                     "mercado",
+                    "time_scrape",
                 ],
             )
 
             # Salva o DataFrame em um arquivo CSV
             if not os.path.isfile("dados.csv"):
+                "Arquivo não encontrado, criando 'dados.csv"
                 df.to_csv("dados.csv", index=False)
             else:
                 df_existing = pd.read_csv("dados.csv")
                 df_updated = pd.concat([df_existing, df], ignore_index=True)
                 df_updated.to_csv("dados.csv", index=False)
 
-        except:
+        except Exception as e:
             print("Erro ao criar csv")
+            print(e)
 
     except scraper.simpleException as e:
         print(e)
@@ -333,24 +373,14 @@ def get_data_races(race):
     return df
 
 
-# Cria uma lista de corridas e exibe quantas temos hoje
-# race_list = get_race_list(soup)
-# print("\n Total de corridas hoje:", race_list.shape[0])
+# # Cria o scraper usando o CloudScraper
+scraper = cloudscraper.create_scraper()
 
 # while True:
 #     try:
-#         next_race = get_next_race(race_list)
-#         df_winner = get_data_races(next_race)
-
-#         top_2_finish_nxr = next_race.replace("winner", top_2_finish)
-#         top_3_finish_nxr = next_race.replace("winner", top_3_finish)
-
-#         top_2_finish_nxr = get_data_races(top_2_finish_nxr)
-#         top_3_finish_nxr = get_data_races(top_3_finish_nxr)
-
+#         next_race = get_next_race(df)
+#         get_data_races(next_race)
 #         time.sleep(30)
-
-#     except:
-#         print("Erro ao tentar capturar a próxima corrida")
-#         print("Provavelmente elas terminaram...")
+#     except Exception as e:
+#         print("Erro desconhecido:", str(e))
 #         break
