@@ -69,4 +69,6 @@ docker build -t galgos_db .
 Para rodar o banco de dados:
 ```shell
 docker run -d -p 5432:5432 --name galgos_db galgos_db
+docker run -d -p 5432:5432 --name galgos_db -v /data:/var/lib/postgresql/data galgos_db
+
 ```
