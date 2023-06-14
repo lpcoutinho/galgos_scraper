@@ -18,6 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from urllib3 import disable_warnings
 from urllib3.exceptions import InsecureRequestWarning
+from zenrows import ZenRowsClient
 
 from utils import ler_trecho
 
@@ -30,7 +31,6 @@ DATABASE = os.getenv("DATABASE")
 USERDB = os.getenv("USERDB")
 PASSWORD = os.getenv("PASSWORD")
 
-# import cloudscraper
 # URLs
 top_2_finish = "top-2-finish"
 top_3_finish = "top-3-finish"
@@ -43,7 +43,7 @@ def london_time():
     london_time = london_time.replace(tzinfo=None)
     return london_time
 
-print(HOST)
+
 def establish_connection():
     conn = psycopg2.connect(
         host=HOST,
@@ -55,28 +55,41 @@ def establish_connection():
     return conn
 
 
+def ler_trecho():
+    arquivo_contador = "contador_zen_rows.txt"
+
+    # Abrir o arquivo de texto em modo leitura
+    with open(arquivo_contador, "r") as arquivo:
+        # Ler o valor atual do contador
+        contador = int(arquivo.read())
+
+    # Incrementar o contador
+    contador += 1
+
+    # Abrir o arquivo de texto em modo escrita
+    with open(arquivo_contador, "w") as arquivo:
+        # Escrever o novo valor do contador
+        arquivo.write(str(contador))
+
+    # Retornar o contador
+    return contador
+
+
 def get_upcoming_races():
-    time_zone_uk = tz.gettz("Europe/London")
-
-    london_time = datetime.now(time_zone_uk)
-    london_time = london_time.replace(tzinfo=None)
-
-    current_time = london_time
-
-    current_time = london_time  # Obtém o horário londrino atual
+    current_time = london_time()  # Obtém o horário londrino atual
     print("Horário londrino:", current_time)
-    limite = current_time + timedelta(
-        hours=2
-    )  # Calcula o horário limite (atual + 2 horas)
+
+    # Calcula o horário limite (atual + 2 horas)
+    limite = current_time + timedelta(hours=2)
 
     df = pd.read_csv("race_list.csv")
-    # print(df)
+
     df["quando"] = pd.to_datetime(
         df["quando"]
     )  # Converte a coluna "quando" para o formato de data e hora
 
     # Filtra as corridas cujo horário esteja dentro do intervalo
-    upcoming_races = df[(df["quando"] > london_time) & (df["quando"] <= limite)]
+    upcoming_races = df[(df["quando"] > london_time()) & (df["quando"] <= limite)]
     # Obtém os links das corridas futuras como uma lista
     upcoming_races_links = upcoming_races["link"].tolist()
 
@@ -100,171 +113,106 @@ def get_data_races(race):
         print("Fazendo uma requisição para obter o conteúdo da página da corrida...\n")
         scraper = cloudscraper.create_scraper()
         response = scraper.get(race)
-        # print(response.text)
-        # response_log(response)
-        # response = response.text
-    except exceptions.CloudflareChallengeError as e:
-        print("Erro Cloudflare Challenge:", str(e))
-        # proxy = (
-        #     "http://76574a8de357e6663ca07da88a64532437ddf5f5:@proxy.zenrows.com:8001"
-        # )
-        proxy = "http://76574a8de357e6663ca07da88a64532437ddf5f5:antibot=true@proxy.zenrows.com:8001"
-        proxies = {"http": proxy, "https": proxy}
-        # response = requests.get(race, proxies=proxies, verify=False)
-        response = requests.get(race, proxies=proxies)
-        # response = response.text
-        # response_log(response)
-        ler_trecho()
-    except exceptions.CloudflareCaptchaError as e:
-        print("Erro Cloudflare Captcha:", str(e))
-    # except exceptions.CloudflareConnectionError as e:
-    #     print("Erro de conexão com o Cloudflare:", str(e))
-    # except exceptions.HTTPError as e:
-    #     print("Erro HTTP:", str(e))
-    except Exception as e:
-        print("Erro desconhecido pelo scraper:", str(e))
 
-    try:
-        print(
-            "\nCriando um objeto BeautifulSoup para analisar o conteúdo HTML da página...\n"
-        )
-        # print(response.text)
-
-        # soup = BeautifulSoup(response, "html.parser")
-        # soup = BeautifulSoup(response, "html5lib")
         soup = BeautifulSoup(response.text, "lxml")
-        # soup = BeautifulSoup(response.text, "lxml-xml")
-        # print('soup criado')
 
         # consulte o html
-        # with open("race_list_list.html", "w") as file:
-        #     file.write(soup.prettify())
-    except Exception as e:
-        print("Erro desconhecido pelo BeautifulSoup:", str(e))
+        with open("upcoming_cloudscraper.html", "w") as file:
+            file.write(soup.prettify())
+    
+    except exceptions.CloudflareChallengeError as e:
+        print("Erro Cloudflare Challenge:", str(e))
 
+        try:
+            print("\nCloudscraper não funcionou, tentando ZenrowsClient")
+            client = ZenRowsClient("06150d7907d520dc9f432f52ec80e77606a9f8cd")
+            params = {"antibot": "true"}
+            # params = {"js_render":"true","antibot":"true","premium_proxy":"true"}
+
+            ler_trecho()
+
+            response = client.get(race, params=params)
+            # response = client.get(race)
+
+            soup = BeautifulSoup(response.text, "lxml")
+
+            # consulte o html
+            with open("upcoming_zen.html", "w") as file:
+                file.write(soup.prettify())
+        except Exception as e:
+            print(str(e))
+    
     try:
+        if "www.zenrows" in soup.find("p").text:
+            print("\n Zenrows não funcionou:\n", soup.find("p").text)
+
         # Se o HTML possuir o atributo ng-app, utilizar undetected_chromedriver
-        if soup.html.has_attr("ng-app") and soup.html["ng-app"] == "ocAngularApp":
+        elif soup.html.has_attr("ng-app") and soup.html["ng-app"] == "ocAngularApp":
             print("Pega informações por <li>")
 
-            print("Acessando o site...")
-            try:
-                # Configura as opções do Chrome para executar em modo headless
-                chrome_options = Options()
-                chrome_options.add_argument("--headless")
-                # Inicializa o driver do Chrome usando as opções configuradas
-                driver = uc.Chrome(options=chrome_options)
-                # driver = uc.Chrome()
-                driver.get(race)
+            # consulte o html
+            with open("upcoming_zen_li.html", "w") as file:
+                file.write(soup.prettify())
+                
+            list_html = soup.find("li", class_="best-odds-row diff-row")
+        
+            data = []
 
-                time.sleep(15)
-                # Tira um print da tela
-                driver.save_screenshot("screenshot.png")
-
-                print("Aguarde...")
-                # Clique no popup (se existir)
+            # Iterar sobre todos os elementos tr dentro do list_html
+            for li in list_html:
+                trap = li.find("span", class_="trap").text
+                galgo = li.find("span", class_="horse-num-name beta-headline").text
+                odds = li.find("a", class_="bc")
+                odd_frac = odds["data-o"]
+                odd_dec = odds["data-odig"]
+                data_fodds = odds["data-fodds"]
+                time_scrape = datetime.now()
+                
+                data.append(
+                    [
+                        trap,
+                        galgo,
+                        odd_dec,
+                        odd_frac,
+                        data_fodds,
+                        onde,
+                        quando,
+                        mercado,
+                        time_scrape,
+                    ]
+                )
 
                 try:
-                    # Esperar até que um elemento seja visível
-                    element = WebDriverWait(driver, 10).until(
-                        EC.visibility_of_element_located(
-                            (By.XPATH, "/html/body/div[2]/div/div/div/button[1]")
-                        )
+                    print(
+                        f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}"
                     )
+                    # Estabelece a conexão com o banco de dados
+                    conn = establish_connection()
+                    cur = conn.cursor()
 
-                    # Realizar ações no elemento após a espera
-                    element.click()
-                    # driver.find_element(
-                    #     By.XPATH, "/html/body/div[2]/div/div/div/button[1]"
-                    # ).click()
-                    print("Popup selecionado")
+                    # # Executa a consulta SQL para inserir os dados no banco de dados
+                    # query = "INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado) DO UPDATE SET odd = excluded.odd"
+                    query = """
+                        INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado,start_odd)
+                        VALUES (%s, %s, %s, %s, %s, %s,%s)
+                        ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado)
+                        DO UPDATE SET odd = EXCLUDED.odd;
+                    """
+                    # print(query)
+                    data_sql = (odd_dec, onde, quando, trap, galgo, mercado, odd_dec)
+                    cur.execute(query, data_sql)
+                    conn.commit()
+
+                    cur.close()
+                    conn.close()
+                    print("Banco de dados atualizado.\n")
                 except Exception as e:
-                    print("Popup não encontrado")
-                    print(e)
-                    time.sleep(2)
-                    # pass
-
-                # Obtém o conteúdo HTML da página após as interações no navegador
-                html_content = driver.page_source
-
-                # Cria um objeto BeautifulSoup para analisar o conteúdo HTML da página
-                soup = BeautifulSoup(html_content, "html.parser")
-
-                # # consulte o html
-                # with open("race_list_list.html", "w") as file:
-                #     file.write(soup.prettify())
-
-                print("Procurando odds")
-                # Encontrar o tbody desejado pelo id
-                tbody = soup.find("tbody", id="t1")
-
-                data = []
-
-                # Iterar sobre todos os elementos tr dentro do tbody
-                for tr in tbody.find_all("tr", class_="diff-row evTabRow bc"):
-                    trap = tr.find("td", class_="trap-cell").text
-                    galgo = tr.find("td", class_="sel nm basket-active").text
-                    odds = tr.find("td", class_="bc")
-                    odd_frac = odds["data-o"]
-                    odd_dec = odds["data-odig"]
-                    data_fodds = odds["data-fodds"]
-                    time_scrape = datetime.now()
-                    # data.append([trap, galgo, odd_dec, onde, quando, mercado])
-                    data.append(
-                        [
-                            trap,
-                            galgo,
-                            odd_dec,
-                            odd_frac,
-                            data_fodds,
-                            onde,
-                            quando,
-                            mercado,
-                            time_scrape,
-                        ]
+                    print(
+                        "Erro ao salvar informações no banco de dados:",
+                        str(e),
+                        "\n",
                     )
 
-                    try:
-                        print(
-                            f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}"
-                        )
-                        # Estabelece a conexão com o banco de dados
-                        conn = establish_connection()
-                        cur = conn.cursor()
-
-                        # # Executa a consulta SQL para inserir os dados no banco de dados
-                        # query = "INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado) DO UPDATE SET odd = excluded.odd"
-                        query = """
-                            INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado)
-                            DO UPDATE SET odd = EXCLUDED.odd;
-                        """
-                        # print(query)
-                        data_sql = (odd_dec, onde, quando, trap, galgo, mercado)
-                        cur.execute(query, data_sql)
-                        conn.commit()
-
-                        cur.close()
-                        conn.close()
-                        print("Banco de dados atualizado.\n")
-                    except Exception as e:
-                        print(
-                            "Erro ao salvar informações no banco de dados:",
-                            str(e),
-                            "\n",
-                        )
-
-                # Encerra o driver do Chrome
-                driver.quit()
-                print("Encerrando o driver")
-
-            except SessionNotCreatedException as e:
-                print("Erro na criação da sessão do WebDriver:", str(e))
-            except WebDriverException as e:
-                print("Erro genérico do WebDriver:", str(e))
-            except Exception as e:
-                print("Erro desconhecido, provável bloqueio do antibot:", str(e))
         else:
             # Se o HTML não possuir o atributo ng-app pegue os dados apenas com cloudscraper e BeautifulSoup
             print("\nPegando informações por div <div>\n")
@@ -307,14 +255,14 @@ def get_data_races(race):
 
                     # # Executa a consulta SQL para inserir os dados no banco de dados
                     query = """
-                            INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado)
-                            VALUES (%s, %s, %s, %s, %s, %s)
+                            INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado,start_odd)
+                            VALUES (%s, %s, %s, %s, %s, %s,%s)
                             ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado)
                             DO UPDATE SET odd = EXCLUDED.odd;
                     """
                     # print(query)
 
-                    data_sql = (odd_dec, onde, quando, trap, galgo, mercado)
+                    data_sql = (odd_dec, onde, quando, trap, galgo, mercado, odd_dec)
                     cur.execute(query, data_sql)
                     conn.commit()
 
@@ -363,7 +311,9 @@ def get_data_races(race):
 
 
 while True:
+    start_time = time.time()
     try:
+        
         # print(f"Existem {len(next_races)} corridas nos próximos {minutes} minutos\n")
         next_races = get_upcoming_races()
 
@@ -384,10 +334,24 @@ while True:
             top_3_finish_nxr = get_data_races(top_3_finish_nxr)
 
             # Aguarda 30 segundos antes de capturar os dados novamente
-            time.sleep(30)
+            # time.sleep(30)
+        duration = time.time() - start_time
+        # wait_time = 1800 - duration
+        wait_time = 30 - duration
+        print(f"spended {duration} seconds. waiting {wait_time} seconds")
+        if wait_time > 0:
+            time.sleep(wait_time)
     except:
         print("\nErro ao tentar capturar a próxima corrida")
-        print("Provavelmente elas terminaram...\n")
-        break
-next_races = get_upcoming_races()
-# print(next_races)
+        print("Elas terminaram ou Zenrows não funciona...\n")
+        duration = time.time() - start_time
+        # wait_time = 1800 - duration
+        wait_time = 30 - duration
+        print(f"spended {duration} seconds. waiting {wait_time} seconds")
+        if wait_time > 0:
+            time.sleep(wait_time)
+
+        print(f"Sem corridas, esperando {wait_time/60} minutos")
+        time.sleep(wait_time)
+        continue
+        
