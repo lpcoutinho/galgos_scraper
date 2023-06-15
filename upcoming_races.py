@@ -19,8 +19,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from urllib3 import disable_warnings
 from urllib3.exceptions import InsecureRequestWarning
 from zenrows import ZenRowsClient
+from loguru import logger
 
 from utils import ler_trecho
+
+# Logger configs
+logger.add("upcoming_races.log", rotation="500 MB", compression="zip", enqueue=True)
 
 # Carregar as variáveis de ambiente do arquivo .env
 load_dotenv()
@@ -77,8 +81,8 @@ def ler_trecho():
 
 def get_upcoming_races():
     current_time = london_time()  # Obtém o horário londrino atual
-    print("Horário londrino:", current_time)
-
+    logger.info(f"Horário londrino: {current_time}")
+    
     # Calcula o horário limite (atual + 2 horas)
     limite = current_time + timedelta(hours=2)
 
@@ -93,9 +97,14 @@ def get_upcoming_races():
     # Obtém os links das corridas futuras como uma lista
     upcoming_races_links = upcoming_races["link"].tolist()
 
+    qt_races = len(upcoming_races_links)
     # Imprime os links das corridas futuras para fins de verificação
-    print("\n", "Quantidade de corridas a monitorar:", len(upcoming_races_links), "\n")
-
+    logger.info(f"Quantidade de corridas a monitorar: {qt_races}")
+    
+    if qt_races == 0:
+        logger.warning(f"As corridas acabaram, aguarde 30min")
+        time.sleep(1800)    
+    
     return upcoming_races_links
 
 
@@ -110,7 +119,7 @@ def get_data_races(race):
     quando = f"{date} {quando}"
 
     try:
-        print("Fazendo uma requisição para obter o conteúdo da página da corrida...\n")
+        logger.info("Fazendo uma requisição para obter o conteúdo da página da corrida...")
         scraper = cloudscraper.create_scraper()
         response = scraper.get(race)
 
@@ -121,10 +130,11 @@ def get_data_races(race):
             file.write(soup.prettify())
     
     except exceptions.CloudflareChallengeError as e:
-        print("Erro Cloudflare Challenge:", str(e))
-
+        logger.error(f"Erro Cloudflare Challenge:{str(e)}")
+        
         try:
-            print("\nCloudscraper não funcionou, tentando ZenrowsClient")
+            logger.info("Cloudscraper não funcionou, tentando ZenrowsClient")
+            
             client = ZenRowsClient("06150d7907d520dc9f432f52ec80e77606a9f8cd")
             params = {"antibot": "true"}
             # params = {"js_render":"true","antibot":"true","premium_proxy":"true"}
@@ -141,20 +151,20 @@ def get_data_races(race):
                 file.write(soup.prettify())
         except Exception as e:
             print(str(e))
-    
+            logger.error(str(e))
     try:
         if "www.zenrows" in soup.find("p").text:
-            print("\n Zenrows não funcionou:\n", soup.find("p").text)
-
+            logger.error(f"Zenrows não funcionou: {soup.find('p').text}")
+            
         # Se o HTML possuir o atributo ng-app, utilizar undetected_chromedriver
         elif soup.html.has_attr("ng-app") and soup.html["ng-app"] == "ocAngularApp":
-            print("Pega informações por <li>")
-
+            logger.info("Pega informações por <li>")
+            
             # consulte o html
             with open("upcoming_zen_li.html", "w") as file:
                 file.write(soup.prettify())
                 
-            list_html = soup.find("li", class_="best-odds-row diff-row")
+            list_html = soup.find_all("li", class_="best-odds-row diff-row")
         
             data = []
 
@@ -183,9 +193,7 @@ def get_data_races(race):
                 )
 
                 try:
-                    print(
-                        f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}"
-                    )
+                    logger.info(f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}")
                     # Estabelece a conexão com o banco de dados
                     conn = establish_connection()
                     cur = conn.cursor()
@@ -193,7 +201,7 @@ def get_data_races(race):
                     # # Executa a consulta SQL para inserir os dados no banco de dados
                     # query = "INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado) DO UPDATE SET odd = excluded.odd"
                     query = """
-                        INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado,start_odd)
+                        INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado, start_odd)
                         VALUES (%s, %s, %s, %s, %s, %s,%s)
                         ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado)
                         DO UPDATE SET odd = EXCLUDED.odd;
@@ -205,18 +213,14 @@ def get_data_races(race):
 
                     cur.close()
                     conn.close()
-                    print("Banco de dados atualizado.\n")
+                    logger.info("Banco de dados atualizado.")
                 except Exception as e:
-                    print(
-                        "Erro ao salvar informações no banco de dados:",
-                        str(e),
-                        "\n",
-                    )
+                    logger.error(f"Erro ao salvar informações no banco de dados: {str(e)}")
 
         else:
             # Se o HTML não possuir o atributo ng-app pegue os dados apenas com cloudscraper e BeautifulSoup
-            print("\nPegando informações por div <div>\n")
-
+            logger.info("Pegando informações por div <div>")
+            
             # Encontra os elementos da lista de cães usando a classe CSS 'diff-row evTabRow bc'
             dog_list = soup.find_all("tr", class_="diff-row evTabRow bc")
 
@@ -246,16 +250,15 @@ def get_data_races(race):
                     ]
                 )
                 try:
-                    print(
-                        f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}"
-                    )
+                    logger.info(f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}")
+                    
                     # Estabelece a conexão com o banco de dados
                     conn = establish_connection()
                     cur = conn.cursor()
 
                     # # Executa a consulta SQL para inserir os dados no banco de dados
                     query = """
-                            INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado,start_odd)
+                            INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado, start_odd)
                             VALUES (%s, %s, %s, %s, %s, %s,%s)
                             ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado)
                             DO UPDATE SET odd = EXCLUDED.odd;
@@ -269,8 +272,9 @@ def get_data_races(race):
                     cur.close()
                     conn.close()
                     print("Banco de dados atualizado.\n")
+                    logger.info("Banco de dados atualizado.")
                 except Exception as e:
-                    print("Erro ao salvar informações no banco de dados:", str(e), "\n")
+                    logger.error(f"Erro ao salvar informações no banco de dados: {str(e)}")
 
         # Cria um DataFrame a partir dos dados coletados
         try:
@@ -292,7 +296,7 @@ def get_data_races(race):
 
             # Salva o DataFrame em um arquivo CSV
             if not os.path.isfile("dados.csv"):
-                "Arquivo não encontrado, criando 'dados.csv"
+                logger.info("Arquivo não encontrado, criando 'dados.csv")
                 df.to_csv("dados.csv", index=False)
             else:
                 df_existing = pd.read_csv("dados.csv")
@@ -300,11 +304,10 @@ def get_data_races(race):
                 df_updated.to_csv("dados.csv", index=False)
 
         except Exception as e:
-            print("Erro ao criar csv")
-            print(e)
+            logger.error("Erro ao criar csv", str(e))
 
     except scraper.simpleException as e:
-        print(e)
+        logger.error(str(e))
 
     print(df)
     return df
@@ -327,10 +330,10 @@ while True:
             get_data_races(race)
 
             # Printa link e obtém os dados das corridas de "top 2 finish" e "top 3 finish"
-            print("\nCapturando dados do mercado Top 2", top_2_finish_nxr, "\n")
+            logger.info(f"Capturando dados do mercado Top 2: {top_2_finish_nxr}")
             top_2_finish_nxr = get_data_races(top_2_finish_nxr)
 
-            print("\nCapturando dados do mercado Top 3", top_3_finish_nxr, "\n")
+            logger.info(f"Capturando dados do mercado Top 3: {top_3_finish_nxr}")
             top_3_finish_nxr = get_data_races(top_3_finish_nxr)
 
             # Aguarda 30 segundos antes de capturar os dados novamente
@@ -338,20 +341,19 @@ while True:
         duration = time.time() - start_time
         # wait_time = 1800 - duration
         wait_time = 30 - duration
-        print(f"spended {duration} seconds. waiting {wait_time} seconds")
+        logger.info(f"spended {duration} seconds. waiting {wait_time} seconds")
         if wait_time > 0:
             time.sleep(wait_time)
     except:
-        print("\nErro ao tentar capturar a próxima corrida")
-        print("Elas terminaram ou Zenrows não funciona...\n")
+        logger.warning("Erro ao tentar capturar a próxima corrida. Elas terminaram ou Zenrows não funciona...")
         duration = time.time() - start_time
         # wait_time = 1800 - duration
         wait_time = 30 - duration
-        print(f"spended {duration} seconds. waiting {wait_time} seconds")
+        logger.warning(f"spended {duration} seconds. waiting {wait_time} seconds")
         if wait_time > 0:
             time.sleep(wait_time)
 
-        print(f"Sem corridas, esperando {wait_time/60} minutos")
+        logger.warning(f"Sem corridas, esperando {wait_time/60} minutos")
         time.sleep(wait_time)
         continue
         

@@ -19,8 +19,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from urllib3 import disable_warnings
 from urllib3.exceptions import InsecureRequestWarning
 from zenrows import ZenRowsClient
+from loguru import logger
 
 from utils import ler_trecho
+
+# Logger configs
+logger.add("next_race.log", rotation="500 MB", compression="zip", enqueue=True)
 
 # Carregar as variáveis de ambiente do arquivo .env
 load_dotenv()
@@ -77,7 +81,7 @@ def ler_trecho():
 
 def get_next_race():
     current_time = london_time()
-    print("Horário londrino:", current_time)
+    logger.info(f"Horário londrino: {current_time}")
 
     # Calcula o horário limite (atual + 2 horas)
     limite = current_time + timedelta(hours=2)
@@ -103,7 +107,7 @@ def get_next_race():
         if (
             tempo_para_inicio.total_seconds() <= 7200
         ):  # Se a corrida ocorre nas próximas duas horas monitore
-            print("\nMonitorando a próxima corrida:\n", next_race_link, "\n")
+            logger.info("\nMonitorando a próxima corrida:\n", next_race_link, "\n")
             return next_race_link
     return None
 
@@ -119,7 +123,7 @@ def get_data_races(race):
     quando = f"{date} {quando}"
 
     try:
-        print("Fazendo uma requisição para obter o conteúdo da página da corrida...\n")
+        logger.info("Fazendo uma requisição para obter o conteúdo da página da corrida...\n")
         scraper = cloudscraper.create_scraper()
         response = scraper.get(race)
 
@@ -130,10 +134,10 @@ def get_data_races(race):
             file.write(soup.prettify())
 
     except exceptions.CloudflareChallengeError as e:
-        print("Erro Cloudflare Challenge:", str(e))
+        logger.error(f"Erro Cloudflare Challenge: {str(e)}" )
 
         try:
-            print("\nCloudscraper não funcionou, tentando ZenrowsClient")
+            logger.info("\nCloudscraper não funcionou, tentando ZenrowsClient")
             client = ZenRowsClient("06150d7907d520dc9f432f52ec80e77606a9f8cd")
             params = {"antibot": "true"}
             # params = {"js_render":"true","antibot":"true","premium_proxy":"true"}
@@ -150,20 +154,21 @@ def get_data_races(race):
                 file.write(soup.prettify())
         except Exception as e:
             print(str(e))
+            logger.error(str(e))
 
     try:
         if "www.zenrows" in soup.find("p").text:
-            print("\n Zenrows não funcionou:\n", soup.find("p").text)
+            logger.warning(f"Zenrows não funcionou: {soup.find('p').text}")
 
         # Se o HTML possuir o atributo ng-app, utilizar undetected_chromedriver
         elif soup.html.has_attr("ng-app") and soup.html["ng-app"] == "ocAngularApp":
-            print("Pega informações por <li>")
+            logger.info("Pega informações por <li>")
             
             # consulte o html
             with open("next_cloudscraper_li.html", "w") as file:
                 file.write(soup.prettify())
 
-            list_html = soup.findAll("li", class_="best-odds-row diff-row")
+            list_html = soup.find_all("li", class_="best-odds-row diff-row")
 
             data = []
 
@@ -192,9 +197,7 @@ def get_data_races(race):
                 )
 
                 try:
-                    print(
-                        f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}"
-                    )
+                    logger.info(f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}")
                     # Estabelece a conexão com o banco de dados
                     conn = establish_connection()
                     cur = conn.cursor()
@@ -214,17 +217,12 @@ def get_data_races(race):
 
                     cur.close()
                     conn.close()
-                    print("Banco de dados atualizado.\n")
+                    logge.info("Banco de dados atualizado.")
                 except Exception as e:
-                    print(
-                        "Erro ao salvar informações no banco de dados:",
-                        str(e),
-                        "\n",
-                    )
-
+                    logger.error(f"Erro ao salvar informações no banco de dados: {str(e)}")
         else:
             # Se o HTML não possuir o atributo ng-app pegue os dados apenas com cloudscraper e BeautifulSoup
-            print("\nPegando informações por div <div>\n")
+            logger.info("Pegando informações por div <div>")
 
             # Encontra os elementos da lista de cães usando a classe CSS 'diff-row evTabRow bc'
             dog_list = soup.find_all("tr", class_="diff-row evTabRow bc")
@@ -255,9 +253,7 @@ def get_data_races(race):
                     ]
                 )
                 try:
-                    print(
-                        f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}"
-                    )
+                    logger.info(f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}")
                     # Estabelece a conexão com o banco de dados
                     conn = establish_connection()
                     cur = conn.cursor()
@@ -277,9 +273,9 @@ def get_data_races(race):
 
                     cur.close()
                     conn.close()
-                    print("Banco de dados atualizado.\n")
+                    logger.info("Banco de dados atualizado.\n")
                 except Exception as e:
-                    print("Erro ao salvar informações no banco de dados:", str(e), "\n")
+                    logger.error(f"Erro ao salvar informações no banco de dados: {str(e)}")
 
         # Cria um DataFrame a partir dos dados coletados
         try:
@@ -301,7 +297,7 @@ def get_data_races(race):
 
             # Salva o DataFrame em um arquivo CSV
             if not os.path.isfile("dados.csv"):
-                "Arquivo não encontrado, criando 'dados.csv"
+                logger.warning("Arquivo não encontrado, criando 'dados.csv")
                 df.to_csv("dados.csv", index=False)
             else:
                 df_existing = pd.read_csv("dados.csv")
@@ -309,11 +305,10 @@ def get_data_races(race):
                 df_updated.to_csv("dados.csv", index=False)
 
         except Exception as e:
-            print("Erro ao criar csv")
-            print(e)
+            logger.error(f"Erro ao criar csv {str(e)}")
 
     except scraper.simpleException as e:
-        print(e)
+        logger.error(str(e))
 
     print(df)
     return df
@@ -325,7 +320,7 @@ while True:
         next_race = get_next_race()
         # print("next_race", next_race)
 
-        print("Capturando dados do mercado Winner", next_race, "\n")
+        logger.info(f"Capturando dados do mercado Winner {next_race}")
         # Obtém os dados da corrida no mercado winner
         df_winner = get_data_races(next_race)
 
@@ -334,18 +329,18 @@ while True:
         top_3_finish_nxr = next_race.replace("winner", top_3_finish)
 
         # Obtém os dados das corridas de "top 2 finish" e "top 3 finish"
-        print("\nCapturando dados do mercado Top 2", top_2_finish_nxr, "\n")
+        logger.info(f"Capturando dados do mercado Top 2 {top_2_finish_nxr}")
         top_2_finish_nxr = get_data_races(top_2_finish_nxr)
 
-        print("\nCapturando dados do mercado Top 3", top_3_finish_nxr, "\n")
+        logger.info(f"Capturando dados do mercado Top 3 {top_3_finish_nxr}")
         top_3_finish_nxr = get_data_races(top_3_finish_nxr)
         # Aguarda 30 segundos antes de capturar os dados novamente
         duration = time.time() - start_time
         wait_time = 30 - duration
-        print(f"spended {duration} seconds. waiting {wait_time} seconds")
+        logger.info(f"spended {duration} seconds. waiting {wait_time} seconds")
         if wait_time > 0:
             time.sleep(wait_time)
     except:
-        print("Sem corridas, esperando 30 minutos")
+        logger.warning("Sem corridas, esperando 30 minutos")
         time.sleep(1800)
         continue
