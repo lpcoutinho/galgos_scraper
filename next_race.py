@@ -45,7 +45,7 @@ def london_time():
     london_time = london_time.replace(tzinfo=None)
     return london_time
 
-
+# Estabelece conexão com banco de dados
 def establish_connection():
     conn = psycopg2.connect(
         host=HOST,
@@ -56,7 +56,7 @@ def establish_connection():
     )
     return conn
 
-
+# Contagem de passagem pelo client Zen Rows
 def ler_trecho():
     arquivo_contador = "contador_zen_rows.txt"
 
@@ -76,7 +76,7 @@ def ler_trecho():
     # Retornar o contador
     return contador
 
-
+# Obtem a próxima corrida
 def get_next_race():
     current_time = london_time()
     logger.info(f"Horário londrino: {current_time}")
@@ -109,7 +109,7 @@ def get_next_race():
             return next_race_link
     return None
 
-
+# Scraper da próxima corrida
 def get_data_races(race):
     print("Extraindo dados da URL...")
     url_parts = race.split("/")
