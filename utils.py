@@ -50,4 +50,3 @@ def response_log(response):
 
         # Escreve o conteúdo
         arquivo.write(response.text + "\n")
-

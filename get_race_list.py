@@ -121,4 +121,3 @@ def get_race_list():
 
 
 get_race_list()
-

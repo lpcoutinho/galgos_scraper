@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from cloudscraper import exceptions
 from dateutil import tz
 from dotenv import load_dotenv
+from loguru import logger
 from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.remote.webdriver import By
@@ -19,9 +20,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from urllib3 import disable_warnings
 from urllib3.exceptions import InsecureRequestWarning
 from zenrows import ZenRowsClient
-from loguru import logger
-
-from utils import ler_trecho
 
 # Logger configs
 logger.add("upcoming_races.log", rotation="500 MB", compression="zip", enqueue=True)
@@ -82,7 +80,7 @@ def ler_trecho():
 def get_upcoming_races():
     current_time = london_time()  # Obtém o horário londrino atual
     logger.info(f"Horário londrino: {current_time}")
-    
+
     # Calcula o horário limite (atual + 2 horas)
     limite = current_time + timedelta(hours=2)
 
@@ -100,11 +98,11 @@ def get_upcoming_races():
     qt_races = len(upcoming_races_links)
     # Imprime os links das corridas futuras para fins de verificação
     logger.info(f"Quantidade de corridas a monitorar: {qt_races}")
-    
+
     if qt_races == 0:
         logger.warning(f"As corridas acabaram, aguarde 30min")
-        time.sleep(1800)    
-    
+        time.sleep(1800)
+
     return upcoming_races_links
 
 
@@ -119,7 +117,9 @@ def get_data_races(race):
     quando = f"{date} {quando}"
 
     try:
-        logger.info("Fazendo uma requisição para obter o conteúdo da página da corrida...")
+        logger.info(
+            f"Fazendo uma requisição para obter o conteúdo da página da corrida. {race}"
+        )
         scraper = cloudscraper.create_scraper()
         response = scraper.get(race)
 
@@ -128,13 +128,13 @@ def get_data_races(race):
         # consulte o html
         with open("upcoming_cloudscraper.html", "w") as file:
             file.write(soup.prettify())
-    
+
     except exceptions.CloudflareChallengeError as e:
         logger.error(f"Erro Cloudflare Challenge:{str(e)}")
-        
+
         try:
             logger.info("Cloudscraper não funcionou, tentando ZenrowsClient")
-            
+
             client = ZenRowsClient("06150d7907d520dc9f432f52ec80e77606a9f8cd")
             params = {"antibot": "true"}
             # params = {"js_render":"true","antibot":"true","premium_proxy":"true"}
@@ -155,168 +155,138 @@ def get_data_races(race):
     try:
         if "www.zenrows" in soup.find("p").text:
             logger.error(f"Zenrows não funcionou: {soup.find('p').text}")
-            
+
         # Se o HTML possuir o atributo ng-app, utilizar undetected_chromedriver
         elif soup.html.has_attr("ng-app") and soup.html["ng-app"] == "ocAngularApp":
             logger.info("Pega informações por <li>")
-            
-            # consulte o html
-            with open("upcoming_zen_li.html", "w") as file:
-                file.write(soup.prettify())
-                
-            list_html = soup.find_all("li", class_="best-odds-row diff-row")
-        
-            data = []
-
-            # Iterar sobre todos os elementos tr dentro do list_html
-            for li in list_html:
-                trap = li.find("span", class_="trap").text
-                galgo = li.find("span", class_="horse-num-name beta-headline").text
-                odds = li.find("a", class_="bc")
-                odd_frac = odds["data-o"]
-                odd_dec = odds["data-odig"]
-                data_fodds = odds["data-fodds"]
-                time_scrape = datetime.now()
-                
-                data.append(
-                    [
-                        trap,
-                        galgo,
-                        odd_dec,
-                        odd_frac,
-                        data_fodds,
-                        onde,
-                        quando,
-                        mercado,
-                        time_scrape,
-                    ]
-                )
-
-                try:
-                    logger.info(f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}")
-                    # Estabelece a conexão com o banco de dados
-                    conn = establish_connection()
-                    cur = conn.cursor()
-
-                    # # Executa a consulta SQL para inserir os dados no banco de dados
-                    # query = "INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado) DO UPDATE SET odd = excluded.odd"
-                    query = """
-                        INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado, start_odd)
-                        VALUES (%s, %s, %s, %s, %s, %s,%s)
-                        ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado)
-                        DO UPDATE SET odd = EXCLUDED.odd;
-                    """
-                    # print(query)
-                    data_sql = (odd_dec, onde, quando, trap, galgo, mercado, odd_dec)
-                    cur.execute(query, data_sql)
-                    conn.commit()
-
-                    cur.close()
-                    conn.close()
-                    logger.info("Banco de dados atualizado.")
-                except Exception as e:
-                    logger.error(f"Erro ao salvar informações no banco de dados: {str(e)}")
+            logger.warning("Passe")
+            pass
 
         else:
             # Se o HTML não possuir o atributo ng-app pegue os dados apenas com cloudscraper e BeautifulSoup
             logger.info("Pegando informações por div <div>")
-            
+
             # Encontra os elementos da lista de cães usando a classe CSS 'diff-row evTabRow bc'
             dog_list = soup.find_all("tr", class_="diff-row evTabRow bc")
+            # print(dog_list)
+            if dog_list == []:
+                logger.warning("Mercado não está aberto aguarde 30s")
+                time.sleep(30)
+                pass
 
-            data = []
-            print("Dados encontrados")
-            # Itera sobre os elementos da lista de cães
-            for dog in dog_list:
-                trap = dog.find("span", class_="trap").text
-                galgo = dog.find("a", class_="popup selTxt").text
-                odds = dog.find("td", class_="bc")
-                odd_frac = odds["data-o"]
-                odd_dec = odds["data-odig"]
-                data_fodds = odds["data-fodds"]
-                time_scrape = datetime.now()
-
-                data.append(
-                    [
-                        trap,
-                        galgo,
-                        odd_dec,
-                        odd_frac,
-                        data_fodds,
-                        onde,
-                        quando,
-                        mercado,
-                        time_scrape,
-                    ]
-                )
-                try:
-                    logger.info(f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}")
-                    
-                    # Estabelece a conexão com o banco de dados
-                    conn = establish_connection()
-                    cur = conn.cursor()
-
-                    # # Executa a consulta SQL para inserir os dados no banco de dados
-                    query = """
-                            INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado, start_odd)
-                            VALUES (%s, %s, %s, %s, %s, %s,%s)
-                            ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado)
-                            DO UPDATE SET odd = EXCLUDED.odd;
-                    """
-                    # print(query)
-
-                    data_sql = (odd_dec, onde, quando, trap, galgo, mercado, odd_dec)
-                    cur.execute(query, data_sql)
-                    conn.commit()
-
-                    cur.close()
-                    conn.close()
-                    print("Banco de dados atualizado.\n")
-                    logger.info("Banco de dados atualizado.")
-                except Exception as e:
-                    logger.error(f"Erro ao salvar informações no banco de dados: {str(e)}")
-
-        # Cria um DataFrame a partir dos dados coletados
-        try:
-            # print(data)
-            df = pd.DataFrame(
-                data,
-                columns=[
-                    "trap",
-                    "galgo",
-                    "odd_dec",
-                    "odd_frac",
-                    "data_fodds",
-                    "onde",
-                    "quando",
-                    "mercado",
-                    "time_scrape",
-                ],
-            )
-
-            # Salva o DataFrame em um arquivo CSV
-            if not os.path.isfile("dados.csv"):
-                logger.info("Arquivo não encontrado, criando 'dados.csv")
-                df.to_csv("dados.csv", index=False)
             else:
-                df_existing = pd.read_csv("dados.csv")
-                df_updated = pd.concat([df_existing, df], ignore_index=True)
-                df_updated.to_csv("dados.csv", index=False)
+                data = []
+                print("Dados encontrados")
+                # Itera sobre os elementos da lista de cães
+                for dog in dog_list:
+                    trap = dog.find("span", class_="trap").text
+                    galgo = dog.find("a", class_="popup selTxt").text
+                    odds = dog.find("td", class_="bc")
+                    odd_frac = odds["data-o"]
+                    odd_dec = odds["data-odig"]
+                    data_fodds = odds["data-fodds"]
+                    time_scrape = datetime.now()
 
-        except Exception as e:
-            logger.error("Erro ao criar csv", str(e))
+                    print(trap)
+                    print(galgo)
+                    print(odd_dec)
+                    print(data_fodds)
+                    print(time_scrape)
+
+                    data.append(
+                        [
+                            trap,
+                            galgo,
+                            odd_dec,
+                            odd_frac,
+                            data_fodds,
+                            onde,
+                            quando,
+                            mercado,
+                            time_scrape,
+                        ]
+                    )
+                    try:
+                        logger.info(
+                            f"Inserindo informações no banco de dados trap: {trap}, galgo: {galgo}, odd_dec: {odd_dec}, onde: {onde}, quando:{quando}, mercado:{mercado}"
+                        )
+
+                        # Estabelece a conexão com o banco de dados
+                        conn = establish_connection()
+                        cur = conn.cursor()
+
+                        # # Executa a consulta SQL para inserir os dados no banco de dados
+                        query = """
+                                INSERT INTO odds (odd, nome_pista, quando, trap, nome_galgo, mercado, start_odd)
+                                VALUES (%s, %s, %s, %s, %s, %s,%s)
+                                ON CONFLICT (nome_pista, quando, trap, nome_galgo, mercado)
+                                DO UPDATE SET odd = EXCLUDED.odd;
+                        """
+                        # print(query)
+
+                        data_sql = (
+                            odd_dec,
+                            onde,
+                            quando,
+                            trap,
+                            galgo,
+                            mercado,
+                            odd_dec,
+                        )
+                        cur.execute(query, data_sql)
+                        conn.commit()
+
+                        cur.close()
+                        conn.close()
+                        print("Banco de dados atualizado.\n")
+                        logger.info("Banco de dados atualizado.")
+                    except Exception as e:
+                        logger.error(
+                            f"Erro ao salvar informações no banco de dados: {str(e)}"
+                        )
+
+                # Cria um DataFrame a partir dos dados coletados
+                try:
+                    # print(data)
+                    df = pd.DataFrame(
+                        data,
+                        columns=[
+                            "trap",
+                            "galgo",
+                            "odd_dec",
+                            "odd_frac",
+                            "data_fodds",
+                            "onde",
+                            "quando",
+                            "mercado",
+                            "time_scrape",
+                        ],
+                    )
+
+                    # Salva o DataFrame em um arquivo CSV
+                    if not os.path.isfile("dados.csv"):
+                        logger.info("Arquivo não encontrado, criando 'dados.csv")
+                        df.to_csv("dados.csv", index=False)
+                    else:
+                        df_existing = pd.read_csv("dados.csv")
+                        df_updated = pd.concat([df_existing, df], ignore_index=True)
+                        df_updated.to_csv("dados.csv", index=False)
+
+                    print(df)
+                    return df
+                except Exception as e:
+                    logger.error(f"Erro ao criar csv {str(e)}")
 
     except scraper.simpleException as e:
         logger.error(str(e))
 
-    print(df)
-    return df
+    # print(df)
+    # return df
 
 
 while True:
     start_time = time.time()
     try:
-        
         # print(f"Existem {len(next_races)} corridas nos próximos {minutes} minutos\n")
         next_races = get_upcoming_races()
 
@@ -340,20 +310,22 @@ while True:
             # time.sleep(30)
         duration = time.time() - start_time
         # wait_time = 1800 - duration
-        wait_time = 30 - duration
+        wait_time = duration + 30 - duration
         logger.info(f"spended {duration} seconds. waiting {wait_time} seconds")
         if wait_time > 0:
             time.sleep(wait_time)
-    except:
-        logger.warning("Erro ao tentar capturar a próxima corrida. Elas terminaram ou Zenrows não funciona...")
+    except Exception as e:
+        logger.warning(
+            "Erro ao tentar capturar a próxima corrida. Elas terminaram ou Zenrows não funciona..."
+        )
         duration = time.time() - start_time
         # wait_time = 1800 - duration
         wait_time = 30 - duration
         logger.warning(f"spended {duration} seconds. waiting {wait_time} seconds")
         if wait_time > 0:
             time.sleep(wait_time)
+        logger.error(str(e))
 
         logger.warning(f"Sem corridas, esperando {wait_time/60} minutos")
         time.sleep(wait_time)
         continue
-        

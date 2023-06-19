@@ -26,6 +26,7 @@ language-selector==0.1
 launchpadlib==1.10.16
 lazr.restfulclient==0.14.4
 lazr.uri==1.0.6
+loguru==0.7.0
 lxml==4.9.2
 more-itertools==8.10.0
 mypy-extensions==1.0.0
@@ -71,4 +72,5 @@ wadllib==1.3.6
 webencodings==0.5.1
 websockets==11.0.3
 wsproto==1.2.0
+zenrows==1.3.1
 zipp==1.0.0
